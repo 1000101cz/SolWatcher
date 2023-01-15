@@ -7,6 +7,7 @@ from urllib.request import urlopen
 from datetime import datetime, timedelta
 import time
 from os.path import expanduser
+import requests
 
 
 class SolWatcher:
@@ -24,9 +25,14 @@ class SolWatcher:
         if self.platform == "Linux":
             self.app_path = self.user_path + "/.local/share/SolWatcher"
             self.df_path = self.app_path + "/dataframe.json"
+            self.ex_path = self.app_path + "/exchanges.json"
         elif self.platform == "Windows":
             self.app_path = self.user_path + "\AppData\Local\SolWatcher"
             self.df_path = self.app_path + "\dataframe.json"
+            self.df_path = self.app_path + "\exchanges.json"
+        else:
+            print("Unknown platform!")
+            exit(100)
 
         if not os.path.exists(self.app_path):
             os.makedirs(self.app_path)
@@ -36,6 +42,9 @@ class SolWatcher:
         self.df = None
         self.oldest_record = None
         self.latest_record = None
+
+        self.exchange_rates = None
+        self.exchange_rates_last_update: datetime = datetime(1990, 1, 1)
 
     def init_df(self):
         """ Load existing data or create new DataFrame """
@@ -55,6 +64,15 @@ class SolWatcher:
                                     'utc_time': timestamps_list})
 
             self.save_dataframe()
+
+    def init_exchanges(self):
+        """ Load existing exchange data or load from internet """
+
+        if os.path.exists(self.ex_path):
+            self.load_exchange_data()
+        else:
+            self.get_exchange_data()
+            self.save_exchange_data()
 
     @staticmethod
     def get_current_utc_time() -> datetime:
@@ -191,14 +209,50 @@ class SolWatcher:
 
         self.df.write_json(self.df_path)
 
-    def print_move_stats(self, delta: timedelta, end_time=None):
+    def get_exchange_data(self):
+        """ Load current exchange rates from exchangerate.host API """
+
+        url = 'https://api.exchangerate.host/latest?base=USD'
+        response = requests.get(url)
+        data = response.json()
+        self.exchange_rates = data['rates']
+        self.exchange_rates_last_update = self.get_current_utc_time().replace(microsecond=0)
+
+    def load_exchange_data(self):
+        """ Load exchange data from local file and update them if they are older than 1 hour """
+
+        with open(self.ex_path, 'r') as outfile:
+            data = json.load(outfile)
+            data_timestamp: int = data['date']
+            data_time = datetime(1970, 1, 1) + timedelta(seconds=data_timestamp) + timedelta(hours=1)
+            current_time = self.get_current_utc_time()
+            delta = current_time - data_time
+            if delta > timedelta(hours=1):
+                self.get_exchange_data()
+                self.save_exchange_data()
+            else:
+                self.exchange_rates_last_update = data_time
+                self.exchange_rates = data['rates']
+
+    def save_exchange_data(self):
+        """ Save exchange rates to local json file """
+
+        ex_dict = {'date': int(time.mktime(self.exchange_rates_last_update.timetuple())),
+                   'rates': self.exchange_rates}
+        with open(self.ex_path, 'w') as outfile:
+            json.dump(ex_dict, outfile)
+
+    def print_move_stats(self, delta: timedelta, end_time=None, fiat: str = 'usd'):
         """
         Print stats for given time delta (current_time - delta  :  current_time)
 
         Args:
             delta:      difference between current_time and start of examined interval
             end_time:   replace current_time with that if not None
+            fiat:       currency to display price in
         """
+        fiat = fiat.upper()
+
         if end_time is not None:
             current_time = end_time
         else:
@@ -209,8 +263,17 @@ class SolWatcher:
         new_price_row = self.df.filter(pl.col('utc_time') == latest_time,)
         old_price = old_price_row['price_usd'][0]
         new_price = new_price_row['price_usd'][0]
+
+        # convert to different fiat currency
+        if fiat != 'USD' and fiat in self.exchange_rates.keys():
+            print(f"1 USD = {self.exchange_rates[fiat]} {fiat}")
+            old_price *= self.exchange_rates[fiat]
+            new_price *= self.exchange_rates[fiat]
+
+        fiat = fiat.lower()
+
         print(f"Investigating last {delta}")
-        print("  - current price: %.2f usd -> %.2f usd" % (old_price, new_price))
+        print(f"  - current price: %.2f {fiat} -> %.2f {fiat}" % (old_price, new_price))
         price_diff = (new_price / old_price - 1) * 100
         print("Price change is: %.2f %%" % price_diff)
 
@@ -218,11 +281,14 @@ class SolWatcher:
 if __name__ == '__main__':
     watcher = SolWatcher()
     watcher.init_df()
+    watcher.init_exchanges()
     print("Description:")
     print(watcher.df.describe())
     print("")
-    watcher.print_move_stats(timedelta(days=1))
+    watcher.print_move_stats(timedelta(days=1), fiat='czk')
     print("")
-    watcher.print_move_stats(timedelta(days=7))
+    watcher.print_move_stats(timedelta(days=7), fiat='czk')
     print("")
-    watcher.print_move_stats(timedelta(days=30))
+    watcher.print_move_stats(timedelta(days=30), fiat='czk')
+
+    watcher.get_exchange_data()
