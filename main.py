@@ -19,6 +19,8 @@ class SolWatcher:
 
         """ Paths """
 
+        self.sol_launch = datetime(2020, 4, 11)
+
         self.user_path: str = expanduser("~")
         self.app_path: str = self.user_path
         self.platform = platform.system()
@@ -44,7 +46,7 @@ class SolWatcher:
         self.latest_record = None
 
         self.exchange_rates = None
-        self.exchange_rates_last_update: datetime = datetime(1990, 1, 1)
+        self.exchange_rates_last_update: datetime = datetime(1970, 1, 1)
 
     def init_df(self):
         """ Load existing data or create new DataFrame """
@@ -53,15 +55,36 @@ class SolWatcher:
             print("Loading existing data...")
             self.load_dataframe()
         else:
-            print("Creating new DataFrame (last 30 days data) ...")
-            time_end = self.get_current_utc_time()
-            time_start = time_end - timedelta(days=30)
+            print("Creating new DataFrame (downloading all-time data) ...")
 
-            prices_list, timestamps_list = self.download_hist_data(coin='solana', fiat='usd', time_s=time_start, time_e=time_end)
+            # all-time data (low precision)
+            time_end = self.get_current_time() - timedelta(days=30)
+            time_start = self.sol_launch
+            prices_list, timestamps_list = self.download_hist_data(coin='solana', fiat='usd', time_s=time_start,
+                                                                   time_e=time_end)
+
+            # 30 days data (higher precision)
+            time_end = self.get_current_time() - timedelta(days=1)
+            time_start = time_end - timedelta(days=30)
+            prices_30_list, timestamps_30_list = self.download_hist_data(coin='solana', fiat='usd', time_s=time_start,
+                                                                         time_e=time_end)
+            prices_list, timestamps_list = self.add_new_records(prices_list, timestamps_list,
+                                                                prices_30_list, timestamps_30_list)
+
+            # 1 day data (even higher precision)
+            time_end = self.get_current_time()
+            time_start = time_end - timedelta(days=1)
+            prices_24_list, timestamps_24_list = self.download_hist_data(coin='solana', fiat='usd', time_s=time_start,
+                                                                         time_e=time_end)
+            prices_list, timestamps_list = self.add_new_records(prices_list, timestamps_list,
+                                                                prices_24_list, timestamps_24_list)
 
             # create dataframe
             self.df = pl.DataFrame({'price_usd': prices_list,
-                                    'utc_time': timestamps_list})
+                                    'time': timestamps_list})
+
+            # sort DataFrame
+            self.df = self.df.sort('time')
 
             self.save_dataframe()
 
@@ -69,16 +92,29 @@ class SolWatcher:
         """ Load existing exchange data or load from internet """
 
         if os.path.exists(self.ex_path):
+            print("Loading existing exchange rates...")
             self.load_exchange_data()
         else:
+            print("Local exchange rates data not found...")
             self.get_exchange_data()
             self.save_exchange_data()
 
     @staticmethod
-    def get_current_utc_time() -> datetime:
-        """ Get current UTC time """
+    def add_new_records(prices: list, timestamps: list, prices_new: list, timestamps_new: list) -> (list, list):
+        """ Add just new price records to existing lists """
 
-        return datetime.utcnow()
+        for i in range(len(timestamps_new)):
+            if timestamps_new[i] not in timestamps:
+                prices.append(prices_new[i])
+                timestamps.append(timestamps_new[i])
+
+        return prices, timestamps
+
+    @staticmethod
+    def get_current_time() -> datetime:
+        """ Get current time """
+
+        return datetime.now()
 
     @staticmethod
     def prepare_api_url(coin: str, fiat: str, start: str, end: str) -> str:
@@ -95,11 +131,13 @@ class SolWatcher:
             url:    request url
         """
 
-        url = f"https://api.coingecko.com/api/v3/coins/{coin}/market_chart/range?vs_currency={fiat}&from={start}&to={end}"
+        url = "https://api.coingecko.com/api/v3/coins/" + \
+              f"{coin}/market_chart/range?vs_currency={fiat}&from={start}&to={end}"
 
         return url
 
-    def download_hist_data(self, coin: str = 'solana', fiat: str = 'usd', time_s: datetime = None, time_e: datetime = None) -> (list, list):
+    def download_hist_data(self, coin: str = 'solana', fiat: str = 'usd',
+                           time_s: datetime = None, time_e: datetime = None) -> (list, list):
         """
         Download historical data of selected coin from given interval
 
@@ -150,12 +188,12 @@ class SolWatcher:
             latest:     latest record in selected dataframe
         """
         if cut_area:
-            df_cut = self.df.filter(pl.col('utc_time').is_between(start, end, closed="both"),)
+            df_cut = self.df.filter(pl.col('time').is_between(start, end, closed="both"),)
         else:
             df_cut = self.df
 
-        latest = df_cut['utc_time'].max()
-        oldest = df_cut['utc_time'].min()
+        latest = df_cut['time'].max()
+        oldest = df_cut['time'].min()
 
         return oldest, latest
 
@@ -170,7 +208,7 @@ class SolWatcher:
         Out:
             time_diff:  time difference between current time and latest record
         """
-        current_time = self.get_current_utc_time()
+        current_time = self.get_current_time()
         self.get_time_extremes()
         time_diff = current_time - self.latest_record
 
@@ -187,12 +225,12 @@ class SolWatcher:
 
         # update if time difference is greater than min_diff minutes
         if timediff_minutes > min_diff:
-            current_time = self.get_current_utc_time()
+            current_time = self.get_current_time()
             start_time = current_time - timedelta(minutes=timediff_minutes)
-            print(f"Fetching data from {start_time} to {current_time} [UTC]")
+            print(f"Fetching data from {start_time} to {current_time}")
             new_prices, new_times = self.download_hist_data('solana', 'usd', start_time, current_time)
             new_df = pl.DataFrame({'price_usd': new_prices,
-                                   'utc_time': new_times})
+                                   'time': new_times})
             self.df = pl.concat([self.df, new_df], how="vertical")
             self.save_dataframe()
         else:
@@ -210,13 +248,12 @@ class SolWatcher:
         self.df.write_json(self.df_path)
 
     def get_exchange_data(self):
-        """ Load current exchange rates from exchangerate.host API """
+        """ Load current exchange rates from ExchangeRate API """
 
-        url = 'https://api.exchangerate.host/latest?base=USD'
-        response = requests.get(url)
+        response = requests.get('https://api.exchangerate.host/latest?base=USD')
         data = response.json()
         self.exchange_rates = data['rates']
-        self.exchange_rates_last_update = self.get_current_utc_time().replace(microsecond=0)
+        self.exchange_rates_last_update = self.get_current_time().replace(microsecond=0)
 
     def load_exchange_data(self):
         """ Load exchange data from local file and update them if they are older than 1 hour """
@@ -224,13 +261,15 @@ class SolWatcher:
         with open(self.ex_path, 'r') as outfile:
             data = json.load(outfile)
             data_timestamp: int = data['date']
-            data_time = datetime(1970, 1, 1) + timedelta(seconds=data_timestamp) + timedelta(hours=1)
-            current_time = self.get_current_utc_time()
+            data_time = datetime(1970, 1, 1) + timedelta(seconds=data_timestamp)
+            current_time = self.get_current_time()
             delta = current_time - data_time
             if delta > timedelta(hours=1):
+                print(f"Exchange data are outdated ({delta}) -> Downloading new data")
                 self.get_exchange_data()
                 self.save_exchange_data()
             else:
+                print(f"Exchange data are up-to-date ({delta}) -> Using local data")
                 self.exchange_rates_last_update = data_time
                 self.exchange_rates = data['rates']
 
@@ -256,11 +295,11 @@ class SolWatcher:
         if end_time is not None:
             current_time = end_time
         else:
-            current_time = self.get_current_utc_time()
+            current_time = self.get_current_time()
         back_time = current_time - delta
         old_time, latest_time = self.get_time_area_extremes(back_time, current_time, True)
-        old_price_row = self.df.filter(pl.col('utc_time') == old_time,)
-        new_price_row = self.df.filter(pl.col('utc_time') == latest_time,)
+        old_price_row = self.df.filter(pl.col('time') == old_time,)
+        new_price_row = self.df.filter(pl.col('time') == latest_time,)
         old_price = old_price_row['price_usd'][0]
         new_price = new_price_row['price_usd'][0]
 
@@ -282,7 +321,7 @@ if __name__ == '__main__':
     watcher = SolWatcher()
     watcher.init_df()
     watcher.init_exchanges()
-    print("Description:")
+    print("\nDescription:")
     print(watcher.df.describe())
     print("")
     watcher.print_move_stats(timedelta(days=1), fiat='czk')
