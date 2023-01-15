@@ -4,5 +4,6 @@ Python script for smart saving history price of SOL cryptocurrency to local data
 
 ## Built with
 * Python
-* Polars
-* CoinGecko API
+* Polars - crypto price database management 
+* https://www.coingecko.com/ API - Crypto Price
+* https://exchangerate.host/ API - Fiat Exchange Rates
