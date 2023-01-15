@@ -48,25 +48,40 @@ class SolWatcher:
             time_end = self.get_current_utc_time()
             time_start = time_end - timedelta(days=30)
 
-            prices_list, timestamps_list = self.download_hist_data(coin='solana', fiat='czk', time_s=time_start, time_e=time_end)
+            prices_list, timestamps_list = self.download_hist_data(coin='solana', fiat='usd', time_s=time_start, time_e=time_end)
 
             # create dataframe
-            self.df = pl.DataFrame({'price': prices_list,
+            self.df = pl.DataFrame({'price_usd': prices_list,
                                     'utc_time': timestamps_list})
 
             self.save_dataframe()
 
     @staticmethod
     def get_current_utc_time() -> datetime:
+        """ Get current UTC time """
+
         return datetime.utcnow()
 
     @staticmethod
     def prepare_api_url(coin: str, fiat: str, start: str, end: str) -> str:
+        """
+        Prepare url for CoinGecko API request
+
+        Args:
+            coin:   name of cryptocurrency
+            fiat:   name of currency to display price in
+            start:  unix-like start timestamp
+            end:    unix-like end timestamp
+
+        Out:
+            url:    request url
+        """
+
         url = f"https://api.coingecko.com/api/v3/coins/{coin}/market_chart/range?vs_currency={fiat}&from={start}&to={end}"
 
         return url
 
-    def download_hist_data(self, coin: str = 'solana', fiat: str = 'czk', time_s: datetime = None, time_e: datetime = None) -> (list, list):
+    def download_hist_data(self, coin: str = 'solana', fiat: str = 'usd', time_s: datetime = None, time_e: datetime = None) -> (list, list):
         """
         Download historical data of selected coin from given interval
 
@@ -76,8 +91,9 @@ class SolWatcher:
             time_s:     interval start datetime
             time_e:     interval end datetime
 
-        Output:
-
+        Out:
+            prices:         list of prices
+            timestamps:     list of datetime times
         """
 
         delta = time_e - time_s
@@ -104,30 +120,38 @@ class SolWatcher:
         return prices, timestamps
 
     def get_time_area_extremes(self, start: datetime, end: datetime, cut_area: bool) -> (datetime, datetime):
+        """ Get min and max timestamps in selected time area of DataFrame
+
+        Args:
+            start:      start of selected area
+            end:        end of selected area
+            cut_area:   True = cut DataFrame with start&end | False = use whole DataFrame
+
+        Out:
+            oldest:     oldest record in selected dataframe
+            latest:     latest record in selected dataframe
+        """
         if cut_area:
-            df_cut = self.df.filter(pl.col('utc_time').is_between(start, end),)
+            df_cut = self.df.filter(pl.col('utc_time').is_between(start, end, closed="both"),)
         else:
             df_cut = self.df
 
-        latest = 0
-        oldest = 0
-        for i in range(len(df_cut['utc_time'])):
-            record_datetime = df_cut['utc_time'][i]
-            if i == 0:
-                latest = record_datetime
-                oldest = record_datetime
-            else:
-                if record_datetime > latest:
-                    latest = record_datetime
-                if record_datetime < oldest:
-                    oldest = record_datetime
+        latest = df_cut['utc_time'].max()
+        oldest = df_cut['utc_time'].min()
+
         return oldest, latest
 
     def get_time_extremes(self):
+        """ Find oldest and latest record in whole DataFrame """
         self.oldest_record, self.latest_record = self.get_time_area_extremes(datetime.now(), datetime.now(), False)
         print(f"Got data between {self.oldest_record} and {self.latest_record}")
 
     def get_time_diff(self) -> timedelta:
+        """ Compute time difference between current time and latest record in DataFrame
+
+        Out:
+            time_diff:  time difference between current time and latest record
+        """
         current_time = self.get_current_utc_time()
         self.get_time_extremes()
         time_diff = current_time - self.latest_record
@@ -135,7 +159,12 @@ class SolWatcher:
         return time_diff
 
     def refresh_dataframe(self, min_diff: int):
-        """ Download the latest price data if time difference is greater than min_diff """
+        """
+        Download the latest price data if time difference is greater than min_diff
+
+        Args:
+            min_diff:   minimal time difference threshold
+        """
         timediff_minutes = int(self.get_time_diff().total_seconds()) // 60
 
         # update if time difference is greater than min_diff minutes
@@ -143,8 +172,8 @@ class SolWatcher:
             current_time = self.get_current_utc_time()
             start_time = current_time - timedelta(minutes=timediff_minutes)
             print(f"Fetching data from {start_time} to {current_time} [UTC]")
-            new_prices, new_times = self.download_hist_data('solana', 'czk', start_time, current_time)
-            new_df = pl.DataFrame({'price': new_prices,
+            new_prices, new_times = self.download_hist_data('solana', 'usd', start_time, current_time)
+            new_df = pl.DataFrame({'price_usd': new_prices,
                                    'utc_time': new_times})
             self.df = pl.concat([self.df, new_df], how="vertical")
             self.save_dataframe()
@@ -152,23 +181,36 @@ class SolWatcher:
             print(f"Data are up-to-date. {timediff_minutes} minutes differance")
 
     def load_dataframe(self):
+        """ Load DataFrame from local file and update data if they are out-dated """
+
         self.df = pl.read_json(self.df_path)
         self.refresh_dataframe(5)
 
     def save_dataframe(self):
+        """ Save current DataFrame to local file """
+
         self.df.write_json(self.df_path)
 
-    def print_move_stats(self, delta: timedelta):
-        current_time = self.get_current_utc_time()
+    def print_move_stats(self, delta: timedelta, end_time=None):
+        """
+        Print stats for given time delta (current_time - delta  :  current_time)
+
+        Args:
+            delta:      difference between current_time and start of examined interval
+            end_time:   replace current_time with that if not None
+        """
+        if end_time is not None:
+            current_time = end_time
+        else:
+            current_time = self.get_current_utc_time()
         back_time = current_time - delta
         old_time, latest_time = self.get_time_area_extremes(back_time, current_time, True)
         old_price_row = self.df.filter(pl.col('utc_time') == old_time,)
         new_price_row = self.df.filter(pl.col('utc_time') == latest_time,)
-        old_price = old_price_row['price'][0]
-        new_price = new_price_row['price'][0]
+        old_price = old_price_row['price_usd'][0]
+        new_price = new_price_row['price_usd'][0]
         print(f"Investigating last {delta}")
-        print("  - current price: %.2f czk" % new_price)
-        print("  - back then price: %.2f czk" % old_price)
+        print("  - current price: %.2f usd -> %.2f usd" % (old_price, new_price))
         price_diff = (new_price / old_price - 1) * 100
         print("Price change is: %.2f %%" % price_diff)
 
