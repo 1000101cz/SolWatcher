@@ -3,14 +3,24 @@ import os
 import platform
 import polars as pl
 import numpy as np
+import pyqtgraph as pg
 from urllib.request import urlopen
 from datetime import datetime, timedelta
+from PyQt6.QtWidgets import *
+from PyQt6 import QtWidgets, uic
 import time
 from os.path import expanduser
 import requests
+import sys
+
+from gui import form
+
+pg.setConfigOption('background', 'w')
+pg.setConfigOption('foreground', 'k')
+pg.setConfigOptions(antialias=True)
 
 
-class SolWatcher:
+class SolWatcher(form.Ui_MainWindow):
 
     def __init__(self):
         """
@@ -31,7 +41,7 @@ class SolWatcher:
         elif self.platform == "Windows":
             self.app_path = self.user_path + "\AppData\Local\SolWatcher"
             self.df_path = self.app_path + "\dataframe.json"
-            self.df_path = self.app_path + "\exchanges.json"
+            self.ex_path = self.app_path + "\exchanges.json"
         else:
             print("Unknown platform!")
             exit(100)
@@ -47,6 +57,13 @@ class SolWatcher:
 
         self.exchange_rates = None
         self.exchange_rates_last_update: datetime = datetime(1970, 1, 1)
+
+        # gui
+        self.gui = None
+
+    def init(self, MainWindow):
+        self.MainWindow = MainWindow
+        self.MainWindow.setWindowTitle("SolWatcher")
 
     def init_df(self):
         """ Load existing data or create new DataFrame """
@@ -317,17 +334,31 @@ class SolWatcher:
         print("Price change is: %.2f %%" % price_diff)
 
 
-if __name__ == '__main__':
-    watcher = SolWatcher()
-    watcher.init_df()
-    watcher.init_exchanges()
-    print("\nDescription:")
-    print(watcher.df.describe())
-    print("")
-    watcher.print_move_stats(timedelta(days=1), fiat='czk')
-    print("")
-    watcher.print_move_stats(timedelta(days=7), fiat='czk')
-    print("")
-    watcher.print_move_stats(timedelta(days=30), fiat='czk')
+class AppWindow(QMainWindow):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.ui = SolWatcher()
+        self.ui.setupUi(self)
+        self.ui.init(self)
+        self.ui.init_df()
+        self.ui.init_exchanges()
+        print("\nDescription:")
+        print(self.ui.df.describe())
+        print("")
+        self.ui.print_move_stats(timedelta(days=1), fiat='czk')
+        self.ui.graphicsView_24h.clear()
+        self.ui.graphicsView_24h.plot(self.ui.df['price_usd'], pen=pg.mkPen(color='k', width=1))
+        print("")
+        self.ui.print_move_stats(timedelta(days=7), fiat='czk')
+        print("")
+        self.ui.print_move_stats(timedelta(days=30), fiat='czk')
+        self.ui.graphicsView_at.clear()
+        self.ui.graphicsView_at.plot(self.ui.df['price_usd'], pen=pg.mkPen(color='k', width=1))
 
-    watcher.get_exchange_data()
+
+if __name__ == '__main__':
+    app = QtWidgets.QApplication(sys.argv)
+    app.setStyle('GTK')
+    w = AppWindow()
+    w.show()
+    sys.exit(app.exec())
