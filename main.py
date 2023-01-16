@@ -7,7 +7,7 @@ import pyqtgraph as pg
 from urllib.request import urlopen
 from datetime import datetime, timedelta
 from PyQt6.QtWidgets import *
-from PyQt6 import QtWidgets, uic
+from PyQt6 import QtWidgets
 import time
 from os.path import expanduser
 import requests
@@ -26,6 +26,8 @@ class SolWatcher(form.Ui_MainWindow):
         """
         Prepare system paths and variables
         """
+
+        self.MainWindow = None
 
         """ Paths """
 
@@ -71,8 +73,9 @@ class SolWatcher(form.Ui_MainWindow):
 
         self.current_usd_price: float = 0
 
-    def init(self, MainWindow):
-        self.MainWindow = MainWindow
+    def init(self, main_window):
+        """ Initialize PyQt6 Window """
+        self.MainWindow = main_window
         self.MainWindow.setWindowTitle("SolWatcher")
 
     def init_df(self):
@@ -127,6 +130,8 @@ class SolWatcher(form.Ui_MainWindow):
             self.save_exchange_data()
 
     def init_gui(self):
+        """ Initialize gui slots and plot default data """
+
         self.connect_slots()
 
         print("\nDescription:")
@@ -140,10 +145,13 @@ class SolWatcher(form.Ui_MainWindow):
         print("")
         self.print_move_stats(timedelta(days=365), fiat='czk', plot=self.graphicsView_1y)
 
+        # default page (24 Hours)
+        self.tabWidget.setCurrentIndex(0)
+
     def connect_slots(self):
+        """ Connect gui actions with functions """
+
         self.tabWidget.currentChanged.connect(self.time_tab_changed)
-
-
 
     @staticmethod
     def add_new_records(prices: list, timestamps: list, prices_new: list, timestamps_new: list) -> (list, list):
@@ -222,6 +230,8 @@ class SolWatcher(form.Ui_MainWindow):
         return prices, timestamps
 
     def plot_time_area(self, plot: pg.GraphicsView, df: pl.DataFrame):
+        """ Plot given DataFrame to given PyQtGraph plot """
+
         prices = list(df['price_usd'])
         timestamps = df['time']
 
@@ -258,7 +268,8 @@ class SolWatcher(form.Ui_MainWindow):
 
         plot.getPlotItem().setLimits(xMin=min_time, xMax=max_time, yMin=fill_lvl, yMax=plot_max)
 
-    def get_time_area_extremes(self, start: datetime, end: datetime, cut_area: bool, plot: pg.GraphicsView = None) -> (datetime, datetime):
+    def get_time_area_extremes(self, start: datetime, end: datetime, cut_area: bool,
+                               plot: pg.GraphicsView = None) -> (datetime, datetime):
         """ Get min and max timestamps in selected time area of DataFrame
 
         Args:
@@ -286,7 +297,9 @@ class SolWatcher(form.Ui_MainWindow):
 
     def get_time_extremes(self):
         """ Find oldest and latest record in whole DataFrame """
-        self.oldest_record, self.latest_record = self.get_time_area_extremes(datetime.now(), datetime.now(), False, self.graphicsView_at)
+
+        self.oldest_record, self.latest_record = self.get_time_area_extremes(datetime.now(), datetime.now(), False,
+                                                                             self.graphicsView_at)
         print(f"Got data between {self.oldest_record} and {self.latest_record}")
 
     def get_time_diff(self) -> timedelta:
@@ -295,6 +308,7 @@ class SolWatcher(form.Ui_MainWindow):
         Out:
             time_diff:  time difference between current time and latest record
         """
+
         current_time = self.get_current_time()
         self.get_time_extremes()
         time_diff = current_time - self.latest_record
@@ -308,6 +322,7 @@ class SolWatcher(form.Ui_MainWindow):
         Args:
             min_diff:   minimal time difference threshold
         """
+
         timediff_minutes = int(self.get_time_diff().total_seconds()) // 60
 
         # update if time difference is greater than min_diff minutes
@@ -369,6 +384,8 @@ class SolWatcher(form.Ui_MainWindow):
             json.dump(ex_dict, outfile)
 
     def time_tab_changed(self):
+        """ change label_change displayed text when switched to different tabWidget page """
+
         current_idx = self.tabWidget.currentIndex()
 
         if current_idx == 0:  # 24 Hours
@@ -407,13 +424,14 @@ class SolWatcher(form.Ui_MainWindow):
 
         if end_time is None:
             self.current_usd_price = new_price
-            self.label_price.setText("%.2f USD" % new_price)
 
         # convert to different fiat currency
         if fiat != 'USD' and fiat in self.exchange_rates.keys():
             print(f"1 USD = {self.exchange_rates[fiat]} {fiat}")
             old_price *= self.exchange_rates[fiat]
             new_price *= self.exchange_rates[fiat]
+
+        self.label_price.setText(f"%.2f {fiat}" % new_price)
 
         fiat = fiat.lower()
 
