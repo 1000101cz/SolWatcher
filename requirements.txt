@@ -1,0 +1,6 @@
+numpy
+polars
+pyqt6
+pyqtgraph
+requests
+pyarrow
