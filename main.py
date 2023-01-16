@@ -58,8 +58,18 @@ class SolWatcher(form.Ui_MainWindow):
         self.exchange_rates = None
         self.exchange_rates_last_update: datetime = datetime(1970, 1, 1)
 
+        self.display_fiat: str = "czk"
+
         # gui
         self.gui = None
+
+        self.change_24h: float = 0
+        self.change_7d: float = 0
+        self.change_30d: float = 0
+        self.change_1y: float = 0
+        self.change_at: float = 0
+
+        self.current_usd_price: float = 0
 
     def init(self, MainWindow):
         self.MainWindow = MainWindow
@@ -115,6 +125,25 @@ class SolWatcher(form.Ui_MainWindow):
             print("Local exchange rates data not found...")
             self.get_exchange_data()
             self.save_exchange_data()
+
+    def init_gui(self):
+        self.connect_slots()
+
+        print("\nDescription:")
+        print(self.df.describe())
+        print("")
+        self.print_move_stats(timedelta(days=1), fiat='czk', plot=self.graphicsView_24h)
+        print("")
+        self.print_move_stats(timedelta(days=7), fiat='czk', plot=self.graphicsView_7d)
+        print("")
+        self.print_move_stats(timedelta(days=30), fiat='czk', plot=self.graphicsView_30d)
+        print("")
+        self.print_move_stats(timedelta(days=365), fiat='czk', plot=self.graphicsView_1y)
+
+    def connect_slots(self):
+        self.tabWidget.currentChanged.connect(self.time_tab_changed)
+
+
 
     @staticmethod
     def add_new_records(prices: list, timestamps: list, prices_new: list, timestamps_new: list) -> (list, list):
@@ -192,13 +221,51 @@ class SolWatcher(form.Ui_MainWindow):
 
         return prices, timestamps
 
-    def get_time_area_extremes(self, start: datetime, end: datetime, cut_area: bool) -> (datetime, datetime):
+    def plot_time_area(self, plot: pg.GraphicsView, df: pl.DataFrame):
+        prices = list(df['price_usd'])
+        timestamps = df['time']
+
+        fiat = self.display_fiat.upper()
+        if fiat != 'USD':
+            if self.exchange_rates is None:
+                self.get_exchange_data()
+            if fiat in self.exchange_rates.keys():
+                exchange_rate = self.exchange_rates[fiat]
+                for i in range(len(prices)):
+                    prices[i] *= exchange_rate
+
+        min_time = timestamps.min()
+        x_axis = []
+
+        for i in range(len(timestamps)):
+            x_axis.append(int((timestamps[i] - min_time).total_seconds()))
+
+        min_time = np.min(x_axis)
+        max_time = np.max(x_axis)
+
+        min_price = np.min(prices)
+        max_price = np.max(prices)
+        price_diff = max_price - min_price
+        plot_max = max_price + price_diff*0.05
+        fill_lvl = min_price - price_diff*0.25
+
+        plot.getPlotItem().showGrid(x=True, y=True, alpha=0.4)
+
+        plot.clear()
+        plot.plot(x_axis, prices, pen=pg.mkPen(width=2, color='#9945FF'), fillLevel=fill_lvl, brush=(20, 241, 149, 100))
+        plot.getPlotItem().setLabel('left', text=f"Price [{fiat}]")
+        plot.getPlotItem().hideAxis('bottom')
+
+        plot.getPlotItem().setLimits(xMin=min_time, xMax=max_time, yMin=fill_lvl, yMax=plot_max)
+
+    def get_time_area_extremes(self, start: datetime, end: datetime, cut_area: bool, plot: pg.GraphicsView = None) -> (datetime, datetime):
         """ Get min and max timestamps in selected time area of DataFrame
 
         Args:
             start:      start of selected area
             end:        end of selected area
             cut_area:   True = cut DataFrame with start&end | False = use whole DataFrame
+            plot:       Plot to visualize area in (None if no visualization)
 
         Out:
             oldest:     oldest record in selected dataframe
@@ -209,6 +276,9 @@ class SolWatcher(form.Ui_MainWindow):
         else:
             df_cut = self.df
 
+        if plot is not None:
+            self.plot_time_area(plot, df_cut)
+
         latest = df_cut['time'].max()
         oldest = df_cut['time'].min()
 
@@ -216,7 +286,7 @@ class SolWatcher(form.Ui_MainWindow):
 
     def get_time_extremes(self):
         """ Find oldest and latest record in whole DataFrame """
-        self.oldest_record, self.latest_record = self.get_time_area_extremes(datetime.now(), datetime.now(), False)
+        self.oldest_record, self.latest_record = self.get_time_area_extremes(datetime.now(), datetime.now(), False, self.graphicsView_at)
         print(f"Got data between {self.oldest_record} and {self.latest_record}")
 
     def get_time_diff(self) -> timedelta:
@@ -298,7 +368,21 @@ class SolWatcher(form.Ui_MainWindow):
         with open(self.ex_path, 'w') as outfile:
             json.dump(ex_dict, outfile)
 
-    def print_move_stats(self, delta: timedelta, end_time=None, fiat: str = 'usd'):
+    def time_tab_changed(self):
+        current_idx = self.tabWidget.currentIndex()
+
+        if current_idx == 0:  # 24 Hours
+            self.label_change.setText("%.2f %%" % self.change_24h)
+        elif current_idx == 1:  # 7 Days
+            self.label_change.setText("%.2f %%" % self.change_7d)
+        elif current_idx == 2:  # 30 Days
+            self.label_change.setText("%.2f %%" % self.change_30d)
+        elif current_idx == 3:  # 1 Year
+            self.label_change.setText("%.2f %%" % self.change_1y)
+        elif current_idx == 4:  # All-Time
+            self.label_change.setText("%.2f %%" % self.change_at)
+
+    def print_move_stats(self, delta: timedelta, end_time=None, fiat: str = 'usd', plot: pg.GraphicsView = None):
         """
         Print stats for given time delta (current_time - delta  :  current_time)
 
@@ -306,6 +390,7 @@ class SolWatcher(form.Ui_MainWindow):
             delta:      difference between current_time and start of examined interval
             end_time:   replace current_time with that if not None
             fiat:       currency to display price in
+            plot:
         """
         fiat = fiat.upper()
 
@@ -314,11 +399,15 @@ class SolWatcher(form.Ui_MainWindow):
         else:
             current_time = self.get_current_time()
         back_time = current_time - delta
-        old_time, latest_time = self.get_time_area_extremes(back_time, current_time, True)
+        old_time, latest_time = self.get_time_area_extremes(back_time, current_time, True, plot)
         old_price_row = self.df.filter(pl.col('time') == old_time,)
         new_price_row = self.df.filter(pl.col('time') == latest_time,)
         old_price = old_price_row['price_usd'][0]
         new_price = new_price_row['price_usd'][0]
+
+        if end_time is None:
+            self.current_usd_price = new_price
+            self.label_price.setText("%.2f USD" % new_price)
 
         # convert to different fiat currency
         if fiat != 'USD' and fiat in self.exchange_rates.keys():
@@ -331,6 +420,15 @@ class SolWatcher(form.Ui_MainWindow):
         print(f"Investigating last {delta}")
         print(f"  - current price: %.2f {fiat} -> %.2f {fiat}" % (old_price, new_price))
         price_diff = (new_price / old_price - 1) * 100
+        if end_time is None:
+            if delta == timedelta(days=1):
+                self.change_24h = price_diff
+            elif delta == timedelta(days=7):
+                self.change_7d = price_diff
+            elif delta == timedelta(days=30):
+                self.change_30d = price_diff
+            elif delta == timedelta(days=365):
+                self.change_1y = price_diff
         print("Price change is: %.2f %%" % price_diff)
 
 
@@ -342,18 +440,7 @@ class AppWindow(QMainWindow):
         self.ui.init(self)
         self.ui.init_df()
         self.ui.init_exchanges()
-        print("\nDescription:")
-        print(self.ui.df.describe())
-        print("")
-        self.ui.print_move_stats(timedelta(days=1), fiat='czk')
-        self.ui.graphicsView_24h.clear()
-        self.ui.graphicsView_24h.plot(self.ui.df['price_usd'], pen=pg.mkPen(color='k', width=1))
-        print("")
-        self.ui.print_move_stats(timedelta(days=7), fiat='czk')
-        print("")
-        self.ui.print_move_stats(timedelta(days=30), fiat='czk')
-        self.ui.graphicsView_at.clear()
-        self.ui.graphicsView_at.plot(self.ui.df['price_usd'], pen=pg.mkPen(color='k', width=1))
+        self.ui.init_gui()
 
 
 if __name__ == '__main__':
