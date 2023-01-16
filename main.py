@@ -15,9 +15,7 @@ import sys
 
 from gui import form
 
-pg.setConfigOption('background', 'w')
-pg.setConfigOption('foreground', 'k')
-pg.setConfigOptions(antialias=True)
+pg.setConfigOptions(background='w', foreground='k', antialias=True, useNumba=True)
 
 
 class SolWatcher(form.Ui_MainWindow):
@@ -144,6 +142,8 @@ class SolWatcher(form.Ui_MainWindow):
         self.print_move_stats(timedelta(days=30), fiat='czk', plot=self.graphicsView_30d)
         print("")
         self.print_move_stats(timedelta(days=365), fiat='czk', plot=self.graphicsView_1y)
+        print("")
+        self.print_move_stats(self.get_current_time() - self.sol_launch, fiat='czk', plot=self.graphicsView_at)
 
         # default page (24 Hours)
         self.tabWidget.setCurrentIndex(0)
@@ -447,6 +447,8 @@ class SolWatcher(form.Ui_MainWindow):
                 self.change_30d = price_diff
             elif delta == timedelta(days=365):
                 self.change_1y = price_diff
+            elif delta > timedelta(days=400):
+                self.change_at = price_diff
         print("Price change is: %.2f %%" % price_diff)
 
 
