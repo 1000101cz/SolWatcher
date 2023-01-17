@@ -6,8 +6,10 @@ import numpy as np
 import pyqtgraph as pg
 from urllib.request import urlopen
 from datetime import datetime, timedelta
+
+from PyQt6.QtGui import QPalette
 from PyQt6.QtWidgets import *
-from PyQt6 import QtWidgets
+from PyQt6 import QtWidgets, QtGui
 import time
 from os.path import expanduser
 import requests
@@ -15,7 +17,7 @@ import sys
 
 from gui import form
 
-pg.setConfigOptions(background='w', foreground='k', antialias=True, useNumba=True)
+pg.setConfigOptions(background='w', foreground='k', antialias=True)
 
 
 class SolWatcher(form.Ui_MainWindow):
@@ -75,6 +77,7 @@ class SolWatcher(form.Ui_MainWindow):
         """ Initialize PyQt6 Window """
         self.MainWindow = main_window
         self.MainWindow.setWindowTitle("SolWatcher")
+        self.MainWindow.setWindowIcon(QtGui.QIcon('data/logo_300.png'))
 
     def init_df(self):
         """ Load existing data or create new DataFrame """
@@ -229,6 +232,18 @@ class SolWatcher(form.Ui_MainWindow):
 
         return prices, timestamps
 
+    def plot_local_extremes(self, plot: pg.GraphicsView, times: list, prices: list):
+        highest_price = np.max(prices)
+        lowest_price = np.min(prices)
+        highest_price_time = times[prices.index(highest_price)]
+        lowest_price_time = times[prices.index(lowest_price)]
+
+        scatter = pg.ScatterPlotItem(size=8, brush=(0, 0, 0), symbol='t')
+        x_data = [lowest_price_time, highest_price_time]
+        y_data = [lowest_price, highest_price]
+        scatter.setData(x_data, y_data)
+        plot.addItem(scatter)
+
     def plot_time_area(self, plot: pg.GraphicsView, df: pl.DataFrame):
         """ Plot given DataFrame to given PyQtGraph plot """
 
@@ -244,11 +259,10 @@ class SolWatcher(form.Ui_MainWindow):
                 for i in range(len(prices)):
                     prices[i] *= exchange_rate
 
-        min_time = timestamps.min()
         x_axis = []
 
         for i in range(len(timestamps)):
-            x_axis.append(int((timestamps[i] - min_time).total_seconds()))
+            x_axis.append(int(time.mktime(timestamps[i].timetuple())))
 
         min_time = np.min(x_axis)
         max_time = np.max(x_axis)
@@ -259,12 +273,16 @@ class SolWatcher(form.Ui_MainWindow):
         plot_max = max_price + price_diff*0.05
         fill_lvl = min_price - price_diff*0.25
 
+        bottom_axis = pg.DateAxisItem()
+
         plot.getPlotItem().showGrid(x=True, y=True, alpha=0.4)
 
         plot.clear()
-        plot.plot(x_axis, prices, pen=pg.mkPen(width=2, color='#9945FF'), fillLevel=fill_lvl, brush=(20, 241, 149, 100))
+        plot.setAxisItems({'bottom': bottom_axis})
+        plot.plot(x=x_axis, y=prices, pen=pg.mkPen(width=2, color='#9945FF'), fillLevel=fill_lvl, brush=(20, 241, 149, 100))
         plot.getPlotItem().setLabel('left', text=f"Price [{fiat}]")
-        plot.getPlotItem().hideAxis('bottom')
+
+        self.plot_local_extremes(plot, x_axis, prices)
 
         plot.getPlotItem().setLimits(xMin=min_time, xMax=max_time, yMin=fill_lvl, yMax=plot_max)
 
@@ -461,6 +479,8 @@ class AppWindow(QMainWindow):
         self.ui.init_df()
         self.ui.init_exchanges()
         self.ui.init_gui()
+        # TODO: set colors
+        # self.setStyleSheet("background:#999999")
 
 
 if __name__ == '__main__':
